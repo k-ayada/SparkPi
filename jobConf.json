@@ -1,0 +1,124 @@
+{
+    "name": "Test Application",
+    "sparkconfs": [
+        {
+            "spark.serializer": "org.apache.spark.serializer.KryoSerializer"
+        }
+    ],
+    "hadoopconfs": [
+        {
+            "fs.s3.enableServerSideEncryption": "true"
+        }
+    ],
+    "appconfs": {
+        "runenv": "AWS",
+        "logging": {
+            "apploglevel": "INFO",
+            "sparkloglevel": "INFO"
+        },
+        "appdefaults": {
+            "explaindf"         : false,
+            "printdfcounts"     : false,
+            "usesqlhints"       : true,
+            "savedfas"          : "NONE",
+            "defaultfileformat" : "parquet",
+            "awsregion"         : "us-east-1",
+            "temphdfs"          : "/temp/",
+            "temps3"            : "s3://<temp_bucket>/"
+        },
+        "connections": {
+            "jdbc" : {
+                "dw" : {
+                    "url" : "",
+                    "driverclass" : "",
+                    "user": "",
+                    "password" : "",
+                    "fetchsize": "100000",
+                    "isolationlevel": "READ_COMMIT"
+                }
+            }
+        },
+        "jobparams": {
+            "IDs" : "",
+            "SOURCE_SYSTEM": "",
+            "MONTH_END" : ""
+        }
+    },
+    "tasks" : [
+        {   "id": "dw_plan",
+            "properties": {
+            "type"           : "jdbcRead",
+            "connectionid"   : "dw",
+            "schema"         : "",
+            "table"          : "",
+            "repartition"    : "0",
+            "printschema"    : "true",
+            "broadcast"      : "true",
+            "loadcount"      : "true", 
+            "readsplitoncol" : "sk_plan",
+            "numberofsplits" : "10",
+            "lowerbound"     : "",
+            "upperbound"     : "" ,
+            "sql"            : ["select plan_sk, source_system ",
+                                "  from {v['db-dw']}.plan ",
+                                " where del = 'N' "
+                            ]
+            }
+        }, 
+        {   "id" :"dw_party_cdc",
+            "properties": {
+            "type"           : "jdbcRead",
+            "connectionid"   : "dw",
+            "schema"         : "",
+            "table"          : "",
+            "repartition"    : "0",
+            "printschema"    : "true",
+            "broadcast"      : "true",
+            "loadcount"      : "true", 
+            "readsplitoncol" : "sk_plan",
+            "numberofsplits" : "10",
+            "lowerbound"     : "",
+            "upperbound"     : "" ,
+            "sql"            : ["select party_sk ,plan_sk", 
+                                "  from {v['db-dw']}.party_cdc",
+                                " where del        = 'N'",
+                                "   and EFF_DATE <= '{v['month_end']}'",
+                                "   and TERM_DATE > '{v['month_end']}'"
+                              ]
+            
+            }
+
+        }, 
+        {   "id" :"cdc_res",
+            "properties": {
+            "type"           : "sparkSQL",
+            "persistLevel"   : "none",
+            "sql"            : ["select source_system,plan_sk, party_sk", 
+                                "  from dw_party_cdc pcd",
+                                " inner join dw_plan  pd",
+                                " on pcd.plan_sk = pd.plan_sk"
+                               ]
+            }
+
+        }, 
+        {   "id" :"cdc_res_write",
+            "properties": {
+            "type"           : "sparkSQL",
+            "persistLevel"   : "none",
+            "sql"            : "insert into dw_cdc_res_write select * from cdc_res_write" 
+            }
+
+        }
+    ],
+    "dag"    : {
+        "individuals": [ "dw_plan_dim","dw_party_cdc"]
+       ,"dependents" : [
+        {   "id" : "cdc_res",
+            "parentIds": ["dw_plan_dim","dw_party_cdc"]
+        }
+       ,{  "id" : "cdc_res_write",
+            "parentIds": "cdc_res"
+        }
+       ]
+    }
+}
